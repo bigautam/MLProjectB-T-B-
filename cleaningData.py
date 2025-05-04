@@ -7,74 +7,118 @@ from sklearn.metrics import average_precision_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report
-import matplotlib.pyplot as plt
 from sklearn.tree import plot_tree
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
+# gotta change path per person 
 
-df = pd.read_csv("/mnt/c/Users/Bethl/MLProjectB-T-B-/PS_20174392719_1491204439457_log.csv")
-# print(df.head(5))
+df = pd.read_csv("/mnt/c/Users/sanig/ML/MLProjectB-T-B-/PS_20174392719_1491204439457_log.csv/PS_20174392719_1491204439457_log.csv")
 
-#cleaning up the step so that they are in a 24hr interval instead of up to 744
+# Step adjustment to 24hr format
 df["step"] = df["step"] % 24
-# Convert any 0s (which come from multiples of 24) to 24
 df.loc[df["step"] == 0, "step"] = 24
 
-costomer_df = df[df["nameDest"].str.startswith("C")]
+# Filter for customers only
+df = df[df["nameDest"].str.startswith("C")]
 
-max_size = costomer_df['isFraud'].value_counts().max()
-print(max_size)
-# Balance the target label by upsampling minority class
-lst = [costomer_df]
-for class_index, group in costomer_df.groupby('isFraud'):
-    lst.append(group.sample(max_size, replace=True))
+# Sample 5000 rows FIRST to reduce memory use, then balance
+df = df.sample(n=5000, random_state=42)
 
-# Combine into a balanced DataFrame
-costomer_df = pd.concat(lst).reset_index(drop=True)
+# Balance dataset by upsampling minority class
+fraud = df[df["isFraud"] == 1]
+non_fraud = df[df["isFraud"] == 0].sample(n=len(fraud) * 2, random_state=42)  # Downsample non-fraud to avoid massive duplication
 
-# Now sample 10,000 rows for modeling
-sample_df = costomer_df.sample(n=10000, random_state=42)
+balanced_df = pd.concat([fraud, non_fraud], axis=0).sample(frac=1, random_state=42).reset_index(drop=True)
 
+# Train/test split
+X = balanced_df.drop(columns=['isFraud'])
+y = balanced_df['isFraud']
 
-sample_df1 =sample_df.copy()
-X=sample_df1.drop('isFraud',axis=1)
-y=sample_df1['isFraud']
+# Drop unused features
+X = X.drop(columns=['nameOrig', 'nameDest', 'isFlaggedFraud', 'type'])
 
-# Train-test split
+# Scale numeric columns
+numeric_cols = ['amount', 'oldbalanceOrg', 'newbalanceOrig', 'oldbalanceDest', 'newbalanceDest']
+scaler = StandardScaler()
+X[numeric_cols] = scaler.fit_transform(X[numeric_cols])
+
 X_train, X_test, y_train, y_test = train_test_split(X, y, train_size=0.7, random_state=111)
 
-#Standardizing the numerical columns
-col_names=['amount','oldbalanceOrg','newbalanceOrig','oldbalanceDest','newbalanceDest']
-features_train = X_train[col_names]
-features_test = X_test[col_names]
-scaler = StandardScaler().fit(features_train.values)
-features_train = scaler.transform(features_train.values)
-features_test = scaler.transform(features_test.values)
-X_train[col_names] = features_train
-X_test[col_names] =features_test
+# -------------------------------------- Decision Tree -----------------------------------------------------------
 
-X_train=X_train.drop(['nameOrig','nameDest','isFlaggedFraud', 'type'],axis=1)
-X_train = X_train.reset_index(drop=True)
+# clf = DecisionTreeClassifier(max_depth=4, random_state=42)
 
-X_test=X_test.drop(['nameOrig','nameDest','isFlaggedFraud',"type"],axis=1)
-X_test = X_test.reset_index(drop=True)
+# clf.fit(X_train, y_train)
 
-clf = DecisionTreeClassifier(max_depth=4, random_state=42)
-
-clf.fit(X_train, y_train)
-
-# plot for but maybe itll look good if its vs code opened on jupter have no idea tho :>
-y_pred = clf.predict(X_test)
-print(classification_report(y_test, y_pred))
-print(sample_df1["isFraud"].value_counts(normalize=True))
+# # plot for but maybe itll look good if its vs code opened on jupter have no idea tho :>
+# y_pred = clf.predict(X_test)
+# print(classification_report(y_test, y_pred))
+# print(sample_df1["isFraud"].value_counts(normalize=True))
 
 
-plt.figure(figsize=(20, 10)) 
-plot_tree(clf, 
-          feature_names=X_train.columns, 
-          class_names=["Not Fraud", "Fraud"], 
-          filled=True, 
-          rounded=True)
-plt.title("Decision Tree for Fraud Detection")
+# plt.figure(figsize=(20, 10)) 
+# plot_tree(clf, 
+#           feature_names=X_train.columns, 
+#           class_names=["Not Fraud", "Fraud"], 
+#           filled=True, 
+#           rounded=True)
+# plt.title("Decision Tree for Fraud Detection")
+# plt.show()
+
+# -------------------------------------- Decision Tree -----------------------------------------------------------
+
+# -------------------------------------- KNN  -----------------------------------------------------------
+
+# Split again for validation set
+X_train_small, X_valid, y_train_small, y_valid = train_test_split(
+    X_train, y_train, test_size=0.3, random_state=42
+)
+
+ks = list(range(1, 16))  # Reduce range to speed up
+accuracies_train = []
+accuracies_valid = []
+
+for k in ks:
+    model = KNeighborsClassifier(n_neighbors=k)
+    model.fit(X_train_small, y_train_small)
+
+    accuracies_train.append(accuracy_score(y_train_small, model.predict(X_train_small)))
+    accuracies_valid.append(accuracy_score(y_valid, model.predict(X_valid)))
+
+# Plot K results
+plt.figure(figsize=(8, 4))
+plt.plot(ks, accuracies_valid, label="Validation Accuracy", marker='o')
+plt.plot(ks, accuracies_train, label="Training Accuracy", linestyle='--', marker='x')
+plt.xlabel("Number of Neighbors (k)")
+plt.ylabel("Accuracy")
+plt.title("KNN Accuracy for Different k Values")
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
 plt.show()
+
+# Best k
+best_k = ks[np.argmax(accuracies_valid)]
+print(f"Best k: {best_k}")
+
+# Final KNN model
+knn = KNeighborsClassifier(n_neighbors=best_k)
+knn.fit(X_train, y_train)
+y_pred = knn.predict(X_test)
+
+# Evaluation
+print("Test Accuracy:", accuracy_score(y_test, y_pred))
+print("\nClassification Report:\n", classification_report(y_test, y_pred))
+
+# Confusion matrix
+conf_matrix = confusion_matrix(y_test, y_pred)
+plt.figure(figsize=(5, 4))
+sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues')
+plt.title("Confusion Matrix")
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
+plt.tight_layout()
+plt.show()
+
+# -------------------------------------- KNN -----------------------------------------------------------
